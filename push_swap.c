@@ -6,7 +6,7 @@
 /*   By: ankim <ankim@student.42.fr>                +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/04/04 14:44:40 by ankim             #+#    #+#             */
-/*   Updated: 2025/04/08 14:04:17 by ankim            ###   ########.fr       */
+/*   Updated: 2025/04/16 13:07:02 by ankim            ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -15,18 +15,16 @@
 int	main(int argc, char **argv)
 {
     char **result;
-	int i;
+	int i = 0;
 	t_node *stack_a = NULL;
     t_node *stack_b = NULL;
 
-	i = 0;
 	if (argc < 2)
     {
-        write (1, "ERROR", 6);
+        ft_putstr_fd("ERROR", 2);
 		return (-1);
     }
-	result = ft_printme(argc, argv);
-	if (!result)
+	if (!(result = ft_printme(argc, argv)))
 		return (-1);
     while (result[i] != NULL)
     {
@@ -34,13 +32,19 @@ int	main(int argc, char **argv)
             return (-1);
         i++;
     }
-    if ((check_duplicates(stack_a) == -1))
-        return (-1);
-    if (is_sorted(&stack_a))
+    if ((check_duplicates(stack_a) == -1) || (is_sorted(&stack_a)))
     {
-        ft_printf("ERROR");
+        ft_putstr_fd("ERROR", 2);
         return (-1);
     }
-    turk_algo(&stack_a, &stack_b);
+    else
+    {
+        if (stack_size(stack_a) == 2)
+            swap_a(&stack_a);
+        else if (stack_size(stack_a) == 3)
+            small_sort(&stack_a);
+        else  
+            turk_algo(&stack_a, &stack_b);
+    }
 	return(0);
 }

@@ -1,58 +1,115 @@
 /* ************************************************************************** */
 /*                                                                            */
 /*                                                        :::      ::::::::   */
-/*   algo2.c                                            :+:      :+:    :+:   */
+/*   algo1.c                                            :+:      :+:    :+:   */
 /*                                                    +:+ +:+         +:+     */
 /*   By: ankim <ankim@student.42.fr>                +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/04/08 17:10:39 by ankim             #+#    #+#             */
-/*   Updated: 2025/04/08 17:50:34 by ankim            ###   ########.fr       */
+/*   Updated: 2025/04/16 15:46:09 by ankim            ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
 #include "push_swap.h"
 
+t_node *find_min(t_node *stack)
+{
+    long    min; 
+    t_node *min_node;
+    t_node *tmp;
+
+    if (!stack)
+        return(NULL);
+    tmp = stack->next;
+    min = LONG_MAX;
+    while (tmp != stack)
+    {
+        if (tmp->data < min)
+        {
+            min = tmp->data;
+            min_node = tmp;
+        }
+        tmp = tmp->next;
+    }
+    return(min_node);
+}
+
+t_node *find_max (t_node *stack)
+{
+    long    max;
+    t_node *max_node;
+    t_node *tmp;
+
+    if (!stack)
+        return(NULL);
+    max = LONG_MIN;
+    tmp = stack->next;
+    while (tmp != stack)
+    {
+        if (tmp->data > max)
+        {
+            max = tmp->data;
+            max_node = tmp;
+        }
+        tmp = tmp->next;
+    }
+    return (max_node);
+}
+
 void node_a(t_node *stack_a, t_node *stack_b)
 {
-    current_pos(stack_a);
+    current_pos(stack_a); // refreshes each position
     current_pos(stack_b);
     target_a(stack_a, stack_b);
     cost_a(stack_a, stack_b);
-    cheapest(stack_a);
+    set_cheapest(stack_a);
 }
 
-void current_pos(t_node *stack)
+void current_pos(t_node *stack) // sets index of current node + sets abv median data
 {
-    int current;
-    int median;
+    int index;
+    int mid;
+    t_node *current;
     
-    current = 0;
+    index = 0;
     if (!stack)
         return ;
-    median = stack_size(stack) / 2;
-    while (stack)
-    {
-        stack->id = current;
-        if (current <= median)
-            stack->above_median = true;
-        else
-            stack->above_median = false;
-        stack = stack->next;
-        current++;
-    }
+    mid = stack_size(stack) / 2;
+    // stack->id = index;
+    // if (current->data <= median)
+    //     current->above_mid = true;
+    // else
+    //     current->above_mid = false;
+    // current = current->next;
+    // index++;
+	current = stack;
+	while (current->next != stack)
+	{
+		current->id = index;
+		if (index <= mid)
+			current->above_mid = true;
+		else
+			current->above_mid = false;
+		current = current->next;
+		index++;
+	}
 }
 
-static void target_a (t_node *stack_a, t_node *stack_b)
+void   target_a (t_node *stack_a, t_node *stack_b)
 {
     t_node *current_b;
     t_node *target_node;
+    t_node *current;
     long    best_match_index; // track of the closest smaller # thusfar
 
-    while (stack_a)
+	if (!stack_a)
+		return ;
+    current = stack_a->next;
+    while (current != stack_a)
     {
         best_match_index = LONG_MIN;
-        current_b = stack_b;
-        while (current_b)
+        current_b = stack_b->next;
+        while (current_b != stack_b)
         {
             if ((current_b->data < stack_a->data)
                 && (current_b->data > best_match_index))
@@ -68,44 +125,4 @@ static void target_a (t_node *stack_a, t_node *stack_b)
             stack_a->target_node = target_node;
         stack_a = stack_a->next;
     }
-}
-
-static void cost_a(t_node *stack_a, t_node *stack_b)
-{
-    int size_a;
-    int size_b;
-
-    size_a = stack_size(stack_a);
-    size_b = stack_size(stack_b);
-    while (stack_a)
-    {
-        stack_a->push_cost = stack_a->id;
-        if (!(stack_a->above_median))
-            stack_a->push_cost = size_a - (stack_a->id);
-        if (stack_a->target_node->above_median)
-            stack_a->push_cost += stack_a->target_node->id;
-        else
-            stack_a->push_cost += size_b - (stack_a->target_node->id);
-        stack_a = stack_a->next;
-    }
-}
-
-void cheapest (t_node *stack)
-{
-    long    cheapest_value;
-    t_node  *cheapest_node;
-
-    if (!stack)
-        return ;
-    cheapest_value = LONG_MAX;
-    while (stack)
-    {
-        if (stack->push_cost < cheapest_value)
-        {
-            cheapest_value = stack->push_cost;
-            cheapest_node = stack;
-        }
-        stack = stack->next; 
-    }
-    cheapest_node->cheapest = true;
 }
