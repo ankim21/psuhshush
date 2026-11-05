@@ -53,6 +53,37 @@ Each step saves its result so the next one can start from it. Tell the student e
 | 12. Categories | Default rate per group | Men 10.1% vs women 7.0%. Groups with only 5 people (e.g. "Maternity leave") can't be trusted: one person changes everything. |
 | 13. Coverage | % of clients in each file | Only 28% of clients ever had a credit card here, so the others will have empty credit-card columns. |
 
+### Focus: what is `EXT_SOURCE`?
+
+These 3 columns are the **most important features of the whole project** (top 3 in notebook 04), so the student will ask about them.
+
+**What we know:** the official description file only says *"Normalized score from external data source"*. Home Credit never revealed which source. They are almost certainly **credit scores bought from outside organisations**, such as credit bureaus, telecom operators or other lenders. Think of them like a FICO score in the US or a Banque de France rating, but rescaled.
+
+- **"Normalized"** = rescaled to be between 0 and 1. **Higher = more trustworthy client.**
+- They are **black boxes**: we use them, but we don't know how they were calculated.
+
+**What the data shows (train set):**
+
+| | `EXT_SOURCE_1` | `EXT_SOURCE_2` | `EXT_SOURCE_3` |
+|---|---|---|---|
+| Empty cells | **56%** | 0.2% | 20% |
+| Median value | 0.51 | 0.57 | 0.54 |
+| Default rate, lowest 20% of scores | 14.6% | 15.2% | 16.4% |
+| Default rate, highest 20% of scores | 3.0% | 3.6% | 3.4% |
+| Link with age | **strong (0.60)** | almost none (0.09) | weak (0.21) |
+
+How to read it: clients in the worst 20% of `EXT_SOURCE_3` default **5 times more often** than clients in the best 20%. No other column comes close.
+
+**Three things to point out:**
+1. **They are 3 different sources.** They're only weakly related to each other (correlations 0.11 to 0.21), so each one brings new information. That's why the model uses all three.
+2. **`EXT_SOURCE_1` partly contains age:** older clients get higher scores. Whoever built it probably used age as an input.
+3. **Only 0.06% of clients have all 3 empty.** Almost everyone has at least one score, which is why they are so useful.
+
+**Discussion point for the student:** our model's best features are *someone else's* scores. That's practical, but:
+- if a provider changes its formula or stops selling the data, our model breaks;
+- we can't fully explain a refusal ("your external score was low… computed by someone, somehow");
+- if those scores contain unfairness, our model inherits it.
+
 ### The 3 ideas a beginner must leave with
 1. **Imbalance: why "accuracy" lies.** If the model says "everyone repays", it is right 92% of the time and still catches **zero** bad clients. So we never judge the model by accuracy. We use:
    - **ROC AUC**: "If I pick one bad client and one good client at random, how often does the model give the bad one a higher risk score?" 0.5 = coin flip, 1.0 = perfect.
@@ -124,7 +155,45 @@ Why not "Married = 1, Single = 2, Widow = 3"? Because the model would think Wido
 The example to use: *"A 500k loan is no problem if you earn 300k a year, but it is if you earn 30k."* A ratio captures that, the raw numbers don't. (Notebook 04 will show that `PAYMENT_RATE` became the 4th–6th most important feature.)
 
 ### Concepts worth a minute each
-- **Data leakage** = letting the model "peek" at information it won't have in real life, which makes it look better than it is. Mixing train and test here is OK because every step works client by client and never looks at TARGET. Steps that *learn* from the data (like computing the median) are done later, on the training data only.
+- **Data leakage** = letting the model "peek" at information it won't have in real life, which makes it look better than it is. Explained in detail just below.
+
+### Focus: train vs test, and where leakage can sneak in
+
+**How the data is separated (3 times):**
+
+```
+application_train.csv (has TARGET)        application_test.csv (NO TARGET)
+            └──── notebook 02: stacked, same features built ────┘
+                                  │
+                split back apart: "is TARGET empty?"
+            ┌─────────────────────┴─────────────────────┐
+   train_features.parquet                    test_features.parquet
+            │                                (only used at the end of 03
+   notebook 03: 80/20 split                   to score 5 "new" clients)
+     ┌──────┴──────┐
+  X_train      X_valid  ← final exam, locked until the end
+     │
+  3-fold CV inside X_train (mock exams)
+```
+
+**Do new features go only into training? No.** Every feature must exist for **every** client. The model expects the same 768 columns for anyone it scores. What must stay train-only is *learning numbers from a group of clients*.
+
+| | Type A: uses only this client's own data | Type B: learns something from many clients |
+|---|---|---|
+| Examples | `PAYMENT_RATE`, the 365243 flag, mean of *this client's* past loans, days late on *this client's* payments | Median for empty cells, `StandardScaler`, SMOTE, the threshold, Optuna's settings |
+| Rule | Apply to everyone, any time (notebook 02) | Learn on training data only, then reuse on the others (notebook 03, inside the `Pipeline`) |
+| Why | A client's `PAYMENT_RATE` is the same whether or not other clients are in the table | If validation clients helped compute the median, they helped build the model they're graded on, like seeing the exam answers |
+
+**The test to give the student:** *"Could I compute this for a brand-new client, alone, on the day they apply?"*
+- Yes → Type A, apply it to everyone.
+- No, it needs other clients → Type B, learn it on training data only.
+- And if it uses **other clients' TARGET** (e.g. "default rate of your profession"), it's the most dangerous kind and must *only* be learned on training data. Notebook 02 never does this.
+
+**Two harmless grey areas in notebook 02, worth mentioning to be honest:**
+- One-hot encoding takes its list of categories from train + test. A category seen only in test gives an always-0 column in train, and the model just ignores it.
+- Constant columns are detected on train + test together. At worst, a useless column is kept.
+
+Neither uses TARGET, and neither can make the scores look better than they are.
 - **The average of a 0/1 column is a percentage.** `STATUS_1_MEAN = 0.2` means "1 month late on 20% of months".
 - **Don't copy code blindly:** the Kaggle code this is based on turned *missed* payments into "0 days late", which means "paid on time". The notebook fixes that.
 
@@ -244,12 +313,121 @@ With only 8% bad clients, a model can get lazy and predict "repays" for everyone
 
 **Winner: LightGBM with class weights.** It has the lowest cost, it is fast (98 s vs 195 s for XGBoost), and it needs no extra preparation steps.
 
+### Hyperparameters: the "knobs" of each model
+
+**Parameters vs hyperparameters:**
+- **Parameters** are learned *by the model* during training (the scorecard points of logistic regression, the questions inside each tree).
+- **Hyperparameters** are set *by us* before training, like the settings of a washing machine: temperature, spin speed, duration.
+
+**The one idea that explains almost every knob: too complex vs too simple.**
+
+```
+too simple  ◄──────────────── sweet spot ────────────────►  too complex
+"underfitting"                                           "overfitting"
+misses real patterns                         memorises noise in the training data
+(bad everywhere)                             (great in training, bad on new clients)
+```
+
+Most hyperparameters are a dial between these two ends. Notice that most of our choices push towards *simpler*: with 768 columns and 8% defaults, overfitting is the bigger danger.
+
+#### 🎲 Dummy: `DummyClassifier(strategy="prior")`
+| Knob | Value | What it does |
+|---|---|---|
+| `strategy` | `"prior"` | Always predict the share of defaults seen in training (8%). The only knob. |
+
+#### 📏 Logistic regression (a 3-step pipeline)
+| Step | Knob | Value | What it does |
+|---|---|---|---|
+| Imputer | `strategy` | `"median"` | Fills each empty cell with the median of its column, learned on training data only |
+| Scaler | (none) | | Rescales each column to mean 0 and spread 1, so income in millions doesn't overpower a 0–1 score |
+| Model | `class_weight` | `"balanced"` | A mistake on a defaulter counts ~11× more (because there are ~11 good clients per bad one) |
+| Model | `max_iter` | `1000` | The model finds its points by trial and error, step by step. This is the maximum number of steps. The default of 100 isn't enough with 768 columns. |
+| Model | `C` | `1.0` (default) | **Regularisation**: stops the model from giving huge points to any one column. Smaller C = more cautious. |
+
+#### 🌲🌲🌲 Random forest
+| Knob | Value | What it does | Analogy |
+|---|---|---|---|
+| `n_estimators` | `200` | Number of trees | Number of people in the vote. More = more stable, but slower |
+| `max_depth` | `12` | Maximum number of questions in a row in one tree | Max levels in "20 Questions". Deeper = more detailed = more risk of memorising |
+| `min_samples_leaf` | `50` | Each final answer box must contain at least 50 clients | Forbids conclusions drawn from only 2 or 3 people |
+| `max_features` | `"sqrt"` | At each question, a tree may only look at √768 ≈ 28 random columns | Forces trees to be different from each other, which makes the vote useful |
+| `class_weight` | `"balanced_subsample"` | Same as "balanced", recomputed for each tree's random sample | |
+| `n_jobs` | `-1` | Use all processor cores | Practical only, no effect on results |
+| `random_state` | `42` | Fixes the randomness | Same result every time you run it (reproducibility) |
+
+#### 🚀 XGBoost
+| Knob | Value | What it does | Analogy |
+|---|---|---|---|
+| `n_estimators` | `300` | Number of trees built one after another | Number of correction rounds |
+| `learning_rate` | `0.05` | How much of each tree's correction is kept (5%) | Small, careful steps. Smaller = more trees needed, but usually better |
+| `max_depth` | `6` | Max depth of each tree | Boosting trees are kept **shallow** on purpose: each one only fixes a small part |
+| `subsample` | `0.8` | Each tree trains on a random 80% of clients | Adds randomness → less memorising |
+| `colsample_bytree` | `0.5` | Each tree sees a random 50% of columns | Same idea, for columns |
+| `scale_pos_weight` | `11.39` | Errors on defaulters count 11.39× more | XGBoost's version of `class_weight` (= 282k good ÷ 25k bad) |
+| `tree_method` | `"hist"` | Groups values into bins before searching for splits | Much faster, almost the same quality |
+
+**The `learning_rate` × `n_estimators` trade-off:** imagine walking to a target. Big steps (high rate) get you close quickly but overshoot. Small steps (low rate) are precise but need many more steps (trees). These two knobs are always tuned together.
+
+#### 🧠 Neural network (MLP, 4-step pipeline)
+| Knob | Value | What it does |
+|---|---|---|
+| Imputer + Scaler | median, standard | Same as logistic regression. Neural networks need full, rescaled data |
+| `RandomUnderSampler` | default | Throws away good clients at random until both groups are the same size (~20k each) |
+| `hidden_layer_sizes` | `(64, 32)` | 2 hidden layers: 64 neurons, then 32. More/larger = can learn more complex patterns, but overfits more easily |
+| `early_stopping` | `True` | Keeps 10% of its training data aside and **stops as soon as the score on it stops improving** |
+| `max_iter` | `100` | Maximum number of passes over the training data (called "epochs") |
+| `activation`, `solver` | `relu`, `adam` (defaults) | How each neuron transforms its input / the method used to adjust the weights. Standard choices; no need to go deeper with a beginner |
+
+**Early stopping analogy:** a student revising for an exam. At first, practice scores improve. After a while, they're only memorising the practice book and their real level stops improving. Early stopping says "stop revising now."
+
+#### 🚀 LightGBM: default vs tuned
+LightGBM has the same family of knobs as XGBoost (same idea, different names). The comparison runs used the **defaults**. Optuna then searched for better values.
+
+| Knob | Default | Optuna's choice | What it does | What the change means |
+|---|---|---|---|---|
+| `n_estimators` | 100 | **350** | Number of trees | More trees… |
+| `learning_rate` | 0.1 | **0.032** | Size of each correction | …each with a smaller step. The classic "slow and careful" combination |
+| `num_leaves` | 31 | **23** | Max number of final answer boxes per tree (LightGBM's main complexity knob) | Simpler trees |
+| `max_depth` | -1 (no limit) | **8** | Max depth of each tree | A safety limit on top of `num_leaves` |
+| `min_child_samples` | 20 | **194** | Min clients in each final box | **Much more cautious**: no conclusion from fewer than 194 clients |
+| `subsample` | 1.0 | **0.87** | Share of clients used per tree | A little randomness |
+| `colsample_bytree` | 1.0 | **0.30** | Share of columns per tree | Each tree sees only ~230 of 768 columns, so trees can't all rely on the same few |
+| `reg_lambda` | 0 | **0.039** | Penalty on extreme answers in the boxes | A very light brake |
+| `class_weight` | | `"balanced"` | Errors on defaulters count ~11× more | Kept from the comparison |
+| `subsample_freq` | 0 | `1` | Re-draw the random clients at every tree | Needed, otherwise LightGBM ignores `subsample` |
+
+**How to summarise Optuna's choice for a beginner:** *"many small, cautious trees, each looking at a different part of the data."* Every change goes in the direction of **less overfitting**. That makes sense with 768 columns and only 8% defaulters.
+
+**A detail for a curious student:** `min_child_samples = 194` is right next to the top of the search range (200). Optuna might have gone higher if allowed. Widening that range is a cheap possible improvement.
+
+#### ⚖️ Imbalance tools
+| Tool | Knob | Value | What it does |
+|---|---|---|---|
+| `RandomUnderSampler` | `random_state` | 42 | Which good clients get thrown away is random but reproducible |
+| `SMOTE` | `k_neighbors` | 5 (default) | Each fake defaulter is created between a real defaulter and one of its 5 most similar defaulters |
+
+**Important:** these are applied **only during training**, never when predicting. You can't invent or throw away real clients who apply for a loan.
+
+#### 🔁 Knobs shared by the whole notebook
+| Knob | Value | What it does |
+|---|---|---|
+| `RANDOM_STATE` | 42 | Same random choices every run, so results are reproducible (42 is just a programmer joke; any number works) |
+| `StratifiedKFold(n_splits=3, shuffle=True)` | 3 folds | 3 mock exams, each with 8% defaulters |
+| `test_size` | 0.2 | 20% of clients kept for the final exam |
+| `FN_COST`, `FP_COST` | 10, 1 | Not a model knob but a **business** assumption. Changing it changes the threshold |
+
 ### Step 5: Fine-tuning with Optuna
 - **Hyperparameters** = the model's settings, chosen by *us* before training: number of trees, how big each tree can be, how fast it learns… (Different from what the model learns by itself.)
 - **Analogy:** tuning an oven: temperature, time, rack position.
 - Trying every combination (**grid search**) = 6,561 combinations × 3 folds: way too long.
 - **Optuna** is smarter: it tries a setting, looks at the result, and tries the next one **near the good ones**. 15 tries were enough.
 - Goal given to Optuna: **minimise the business cost**.
+- **The "Optimization History Plot"** (the chart right after the Optuna cell):
+  - x-axis = trial number (0 to 14), y-axis = business cost (lower = better)
+  - **each dot** = one try, with its score
+  - **the line** = the best score found *so far*. It can only go down or stay flat.
+  - Our run: trial 0 = 0.524, the first big drop at trial 2 (0.502), then 0.499 at trial 5, and the best at trial 12 (0.498). Dots keep jumping up (trials 3, 7, 9) because Optuna still explores new areas sometimes. The line goes flat at the end, so more trials would probably gain very little.
+  - Analogy: hunting for the lowest point of a valley in fog. Each step tells you the altitude, and you keep a note of the lowest spot seen so far.
 - Result: cost improved from 0.498 to 0.492. A small gain: LightGBM's default settings were already good.
 
 ### Step 6: The final exam
@@ -372,7 +550,7 @@ The `explain_client()` table gives the same thing as text. That is what an app w
 
 ## 6. Things still to fix in the notebooks
 
-1. **Notebook 03, "My choice" paragraph:** it says "54 seconds against 122 for XGBoost", but the outputs show **98 s vs 195 s**. The conclusion still holds; only the numbers are wrong.
+1. ✅ **Notebook 03, "My choice" paragraph:** the timing now matches the outputs (98 s vs 195 s for XGBoost).
 2. ✅ The fairness claim in notebook 04 (`CODE_GENDER` among the top features, men = higher risk) is **confirmed** by the run: rank 4 by SHAP.
 3. Notebook 04's comparison table (cell 17) prints the SHAP and gain lists side by side. Gain ranks `PAYMENT_RATE` 4th and `CODE_GENDER` 7th. Worth one sentence in the markdown.
 4. One thing that may confuse students: the "average prediction" in SHAP is -0.528 log-odds ≈ **37%**, not 8%. That's because class weights inflate the probabilities. Mention it if someone asks.
@@ -399,6 +577,12 @@ The `explain_client()` table gives the same thing as text. That is what an app w
 | Aggregation | Summarising many rows into one (mean, max, count…) |
 | Data leakage | The model accidentally seeing information it won't have in real life |
 | Hyperparameter | A setting we choose before training (number of trees…) |
+| Parameter | What the model learns by itself during training |
+| Underfitting | Model too simple: misses real patterns |
+| Learning rate | How big each correction step is in boosting |
+| Regularisation | A brake that stops the model from relying too much on any one thing |
+| Early stopping | Stop training when the score on held-back data stops improving |
+| EXT_SOURCE | Credit scores (0–1) bought from undisclosed outside sources; higher = safer |
 | Bagging / Boosting | Many models in parallel voting / in sequence fixing each other's mistakes |
 | SHAP value | How much one feature pushed one client's score up or down |
 | MLflow | Automatic lab notebook + storage for models |
